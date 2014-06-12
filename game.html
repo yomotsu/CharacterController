@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>=^.^=</title>
+<meta charset="utf-8">
+<style>
+body{
+  margin: 0;
+  padding: 0;
+}
+canvas{
+  display: block;
+}
+</style>
+</head>
+<body>
+
+<script src="js/jquery-2.1.1.min.js"></script>
+<script src="js/three.min.js"></script>
+<script src="js/ammo.js"></script>
+<script src="js/CharacterController.js"></script>
+<script src="js/KeyInputControl.js"></script>
+<script src="js/GyroscopeCameraControl.js"></script>
+<script>
+var assetLoader = {
+
+  image: function ( url ) {
+
+    var d = new $.Deferred();
+    var image = new Image();
+
+    image.onload = function () {
+
+      d.resolve( image );
+
+    };
+
+    image.src = url;
+    return d.promise();
+
+  }
+
+};
+
+var createHeightField = function ( width, depth, segX, segZ, heightLevel, heightMapImg, colorMapImg ) {
+
+  var colorMap = new THREE.Texture( colorMapImg );
+  colorMap.needsUpdate = true;
+
+  var mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry( width, depth, segX, segZ ),
+    new THREE.MeshLambertMaterial( { map: colorMap } )
+  );
+  mesh.geometry.applyMatrix( new THREE.Matrix4().makeRotationX( - Math.PI / 2 ) );
+  var body;
+
+  var bakeHeightMapData = function () {
+
+    var canvas = document.createElement( 'canvas' ),
+        ctx = canvas.getContext( '2d' ),
+        heightData,
+        gridX = segX + 1,
+        gridZ = segZ + 1,
+        iz, ix,
+        percentWidth,
+        percentHeight,
+        row,
+        column,
+        rowPixel,
+        columnPixel,
+        index,
+        vertIndex,
+        channels = 4;
+
+    canvas.width  = width;
+    canvas.height = depth;
+    ctx.drawImage( heightMapImg, 0, 0 );
+    heightData = ctx.getImageData( 0, 0, width, depth ).data;
+
+    for ( iz = 0; iz < gridZ; iz ++ ) {
+
+      percentHeight = iz / segZ;
+
+        for ( ix = 0; ix < gridX; ix ++ ) {
+
+          percentWidth  = ix / segX;
+
+          row = Math.round( percentHeight * ( width - 1 ) );
+          column = Math.round( percentWidth * ( depth - 1 ) );
+
+          rowPixel = row * width * channels;
+          columnPixel = column * channels;
+
+          index = rowPixel + columnPixel;
+
+          vertIndex = iz * gridX + ix;
+          mesh.geometry.vertices[ vertIndex ].y = heightData[ index ] * heightLevel / 255;
+
+        }
+
+    };
+
+    mesh.geometry.computeFaceNormals();
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.verticesNeedUpdate = true;
+    mesh.geometry.buffersNeedUpdate = true;
+
+  };
+
+
+  var createHeightfield = function() {
+
+    var geometry = mesh.geometry;
+    var ptr = Ammo.allocate( 4 * segX * segZ, 'float', Ammo.ALLOC_NORMAL );
+    var bounds = geometry.boundingBox;
+    var points = [];
+    var gridX = segX + 1;
+    var gridZ = segZ + 1;
+    var vertCount = gridX * gridZ - 1;
+    var absMaxHeight = Math.max( geometry.boundingBox.max.y, Math.abs( geometry.boundingBox.min.y ) );
+
+    for ( var iz = 0; iz < gridZ; iz ++ ) {
+
+      for ( var ix = 0; ix < gridX; ix ++ ) {
+
+        var vertIndex = ( vertCount - iz * gridX ) - ix;
+        Ammo.setValue( ptr + vertIndex, geometry.vertices[ vertIndex ].y, 'float' );
+
+      }
+
+    };
+
+    for ( var f = 0; f < points.length; f ++ ) {
+
+      Ammo.setValue( ptr + f,  points[ f ]  , 'float' );
+
+    }
+
+    var shape = new Ammo.btHeightfieldTerrainShape(
+      gridX,
+      gridZ,
+      ptr,
+      1, // has no effect?
+      -absMaxHeight,
+      absMaxHeight,
+      1,
+      0,
+      true
+    );
+
+    var xsize = geometry.boundingBox.max.x - geometry.boundingBox.min.x;
+    var zsize = geometry.boundingBox.max.z - geometry.boundingBox.min.z;
+
+    var scaling = new Ammo.btVector3( 0, 0, 0 );
+
+    shape.setLocalScaling( new Ammo.btVector3( xsize / segX, 1, zsize / segZ ) );
+
+    var transform = new Ammo.btTransform();
+    transform.setIdentity();
+    var transfromOrigin = new Ammo.btVector3( 0, 0, 0 );
+    transform.setOrigin( transfromOrigin );
+    var localInertia = new Ammo.btVector3( 0, 0, 0 );
+    var motionState = new Ammo.btDefaultMotionState( transform );
+    var rbInfo = new Ammo.btRigidBodyConstructionInfo( 0, motionState, shape, localInertia );
+    body = new Ammo.btRigidBody( rbInfo );
+
+    Ammo.destroy( scaling );
+    // Ammo.destroy( shape );
+    Ammo.destroy( transform );
+    Ammo.destroy( transfromOrigin );
+    Ammo.destroy( localInertia );
+    // Ammo.destroy( motionState );
+    Ammo.destroy( rbInfo );
+
+  }
+
+  bakeHeightMapData();
+  createHeightfield();
+  return { mesh: mesh, body: body };
+
+};
+
+
+var createBox = function ( width, height, depth, x, y, z ) {
+
+  var x = ( x !== undefined ) ? x: 0;
+  var y = ( y !== undefined ) ? y: 0;
+  var z = ( z !== undefined ) ? z: 0;
+
+  // three
+  var mesh = new THREE.Mesh(
+    new THREE.BoxGeometry( width, height, depth ),
+    new THREE.MeshBasicMaterial( { color: 0xcccccc } )
+  );
+  mesh.position.set( x, y, z )
+  scene.add( mesh );
+
+  // ammo
+  var shape = new Ammo.btBoxShape( new Ammo.btVector3( width / 2, height / 2, depth / 2 ) );
+  var localInertia = new Ammo.btVector3( 0, 0, 0 );
+  var transform = new Ammo.btTransform();
+  var transfromOrigin = new Ammo.btVector3( x, y, z )
+  transform.setIdentity();
+  transform.setOrigin( transfromOrigin );
+  var motionState = new Ammo.btDefaultMotionState( transform );
+  var rbInfo = new Ammo.btRigidBodyConstructionInfo( 0, motionState, shape, localInertia );
+  var body = new Ammo.btRigidBody( rbInfo );
+
+  dynamicsWorld.addRigidBody( body );
+
+  // Ammo.destroy( shape );
+  Ammo.destroy( localInertia );
+  Ammo.destroy( transform );
+  Ammo.destroy( transfromOrigin );
+  Ammo.destroy( motionState );
+  Ammo.destroy( rbInfo );
+
+  return { mesh: mesh, body: body };
+
+};
+
+
+
+
+
+// init three
+var width, height, clock, scene, camera, renderer, dynamicsWorld;
+
+width = window.innerWidth;
+height = window.innerHeight;
+clock = new THREE.Clock();
+
+scene = new THREE.Scene();
+camera = new THREE.PerspectiveCamera( 40, width / height, 1, 1000 );
+
+renderer = new THREE.WebGLRenderer();
+renderer.setSize( width, height );
+document.body.appendChild( renderer.domElement );
+
+var light = new THREE.DirectionalLight( 0xffffff );
+light.position.set( -200, 300, 200 );
+scene.add( light );
+scene.add( new THREE.AmbientLight( 0x333333 ) );
+
+// init ammo
+var gravity = new Ammo.btVector3( 0, -30, 0 );
+var collisionConfig = new Ammo.btDefaultCollisionConfiguration();
+var dispatcher = new Ammo.btCollisionDispatcher( collisionConfig );
+var overlappingPairCache = new Ammo.btDbvtBroadphase();
+var solver = new Ammo.btSequentialImpulseConstraintSolver();
+var dynamicsWorld = new Ammo.btDiscreteDynamicsWorld( dispatcher, overlappingPairCache, solver, collisionConfig );
+dynamicsWorld.setGravity( gravity );
+Ammo.destroy( gravity );
+
+$.when(
+  assetLoader.image( 'terrain/heightmap.png' ),
+  assetLoader.image( 'terrain/color.jpg' )
+).done( function ( heightMapImg, colorMapImg ) {
+
+  var heightField = createHeightField( 1000, 1000, 200, 200, 700, heightMapImg, colorMapImg );
+  scene.add( heightField.mesh );
+  dynamicsWorld.addRigidBody( heightField.body );
+
+  var box = createBox( 150, 3, 30, 0, 380, 0 );
+  console.log( box );
+  scene.add( box.mesh );
+  dynamicsWorld.addRigidBody( box.body );
+
+  var playerRadius = 0.5;
+  var playerHeight = 10;
+  var playerObjectHolder = new THREE.Object3D();
+  playerObjectHolder.position.set( 0, 600, 0 );
+  playerObjectHolder.matrixAutoUpdate = false;
+  scene.add( playerObjectHolder );
+
+  var characterModel = new THREE.Mesh(
+    new THREE.SphereGeometry( playerHeight / 2, 8, 8 ),
+    new THREE.MeshNormalMaterial()
+  );
+  playerObjectHolder.add( characterModel );
+
+  var gyroscopeCameraControl = new GyroscopeCameraControl(
+    camera,
+    playerObjectHolder,
+    {
+      el: renderer.domElement,
+      offset: new THREE.Vector3( 0, 5, 0 ),
+      radius: 40,
+      minRadius: 1,
+      maxRadius: 80,
+      rigidObjects: [ heightField.mesh ]
+
+    }
+  );
+
+  var keyInputControl = new KeyInputControl();
+
+  var characterController = new CharacterController( playerObjectHolder, playerRadius, playerHeight, dynamicsWorld );
+
+  keyInputControl.addEventListener( 'startMoving', function () { characterController.isWalking = true; } );
+  keyInputControl.addEventListener( 'stopMoving',  function () { characterController.isWalking = false; } );
+  keyInputControl.addEventListener( 'jumpKeydown', function () { characterController.jump(); } );
+
+
+  ( function updateAndRender() {
+    requestAnimationFrame( updateAndRender );
+
+    var delta = clock.getDelta();
+
+    var cameraFrontAngle = gyroscopeCameraControl.getFrontAngle();
+    var characterFrontAngle = keyInputControl.getFrontAngle();
+    characterController.frontAngle = ( 360 - cameraFrontAngle ) + characterFrontAngle % 360;
+
+    characterController.update();
+    gyroscopeCameraControl.update();
+    dynamicsWorld.stepSimulation( delta, 1 );
+    renderer.render( scene, camera );
+
+  } )();
+
+} );
+
+</script>
+
+</body>
+</html>
